@@ -5,23 +5,25 @@ import (
 	"errors"
 	"fmt"
 	"io/ioutil"
+	"math/rand"
 	"net"
 	"os"
+	"strconv"
 	"strings"
-	hobobank "trabLRSO/banco/contas"
+	"time"
 )
 
 const tamanhoMaxMensagem = 512
 
 //Servidor struct para definir um servidor TCP
 type Servidor struct {
-	clientes       map[net.Conn]bool                    //clientes conectados no Servidor
-	cadastrar      chan net.Conn                        //canal para registrar um novo cliente
-	descadastrar   chan net.Conn                        //canal para cancelar o registro de um cliente que se desconectou
-	sessoes        map[net.Conn]*hobobank.ContaCorrente //Jogos ativos
-	iniciarSessao  chan net.Conn                        //canal para iniciar um novo jogo de um cliente
-	encerrarSessao chan net.Conn                        //canal para encerrar um jogo com um cliente
-	proximaConta   int                                  //próxima conta a ser atribuída pelo cliente
+	clientes       map[net.Conn]bool     //clientes conectados no Servidor
+	cadastrar      chan net.Conn         //canal para registrar um novo cliente
+	descadastrar   chan net.Conn         //canal para cancelar o registro de um cliente que se desconectou
+	sessoes        map[net.Conn]*Cliente //Jogos ativos
+	iniciarSessao  chan *Cliente         //canal para iniciar uma nova sessão de um cliente conectado
+	encerrarSessao chan *Cliente         //canal para encerrar a sessão de um cliente conectado
+	proximaConta   int                   //próxima conta a ser atribuída pelo cliente
 }
 
 func main() {
@@ -34,15 +36,17 @@ func main() {
 	}
 	fmt.Println("Servidor ouvindo na porta", porta)
 	defer listener.Close() //vai garantir que irá fechar o listener assim que fechar o programa
+	s1 := rand.NewSource(time.Now().UnixNano())
+	r1 := rand.New(s1)
 
 	servidor := Servidor{
 		clientes:       make(map[net.Conn]bool),
 		cadastrar:      make(chan net.Conn),
 		descadastrar:   make(chan net.Conn),
-		sessoes:        make(map[net.Conn]*hobobank.ContaCorrente),
-		iniciarSessao:  make(chan net.Conn),
-		encerrarSessao: make(chan net.Conn),
-		proximaConta:   1,
+		sessoes:        make(map[net.Conn]*Cliente),
+		iniciarSessao:  make(chan *Cliente),
+		encerrarSessao: make(chan *Cliente),
+		proximaConta:   r1.Intn(9999),
 	}
 
 	go servidor.iniciar()
@@ -72,17 +76,16 @@ func (servidor *Servidor) iniciar() {
 				fmt.Println("Um cliente foi desconectado.")
 			}
 		//se houver um novo cliente no canal de iniciarSessao, vai adicionar no mapa de jogos e iniciar um novo jogo com ele
-		case socket := <-servidor.iniciarSessao:
-			servidor.sessoes[socket] = &hobobank.ContaCorrente{}
-			if servidor.sessoes[socket].Login() {
-				fmt.Println("Nova sessão iniciada.")
-			}
+		case conta := <-servidor.iniciarSessao:
+			servidor.sessoes[conta.Socket] = conta
+			_ = salvarContaEmArquivo(conta.Conta)
+			fmt.Println("Nova sessão iniciada.")
 		//se houver um novo cliente no canal de encerrarJogo, vai retirar do mapa de jogos para fechar o jogo com ele
-		case socket := <-servidor.encerrarSessao:
-			_, existe := servidor.sessoes[socket]
+		case conta := <-servidor.encerrarSessao:
+			_, existe := servidor.sessoes[conta.Socket]
 			if existe {
-				delete(servidor.sessoes, socket)
-				fmt.Println("Um jogo foi encerrado.")
+				delete(servidor.sessoes, conta.Socket)
+				fmt.Println("Uma sessão foi encerrada.")
 			}
 		}
 	}
@@ -101,69 +104,131 @@ func (servidor *Servidor) receber(cliente net.Conn) {
 			break
 		}
 		fmt.Println(string(mensagem[:tamMensagem]))
+		strMensagem := string(mensagem[:tamMensagem])
 		if tamMensagem > 0 {
 			comando := mensagem[0]
 			switch comando {
-			//comando para logar no banco
+			//comando para criar uma conta
 			case '0':
-				dadosLogin := strings.Split(string(mensagem), ";")
+				dadosNovaConta := strings.Split(strMensagem, ";")
+				nome := dadosNovaConta[1]
+				cpf := dadosNovaConta[2]
+				senha := dadosNovaConta[3]
+				numeroAgencia := "01"
+				saldo := 0.0
+				numeroConta := fmt.Sprintf("%04d", servidor.proximaConta)
+				s1 := rand.NewSource(time.Now().UnixNano())
+				r1 := rand.New(s1)
+				servidor.proximaConta = r1.Intn(9999)
+
+				conta := &ContaCorrente{
+					Nome:          nome,
+					CPF:           cpf,
+					Senha:         senha,
+					NumeroAgencia: numeroAgencia,
+					NumeroConta:   numeroConta,
+					Saldo:         saldo,
+				}
+
+				fmt.Println("Antes de salvar")
+				err := salvarContaEmArquivo(conta)
+				fmt.Println("Depois de salvar")
+				if err != nil {
+					mensagemAEnviar = []byte("N")
+				} else {
+					fmt.Println("SEM ERRO CARA")
+					mensagemAEnviar = []byte("S;" + numeroConta)
+				}
+				fmt.Println("Antes de mandar para o cliente")
+				_, err = cliente.Write(mensagemAEnviar)
+				fmt.Println("Depois de mandar para o cliente")
+			//comando para logar no banco
+			case '1':
+				dadosLogin := strings.Split(strMensagem, ";")
 				contaLogin := dadosLogin[1]
 				agenciaLogin := dadosLogin[2]
 				senhaLogin := dadosLogin[3]
 
 				conta, err := lerContaDoArquivo(contaLogin)
 
-				if err == nil && contaLogin == conta.NumeroConta && agenciaLogin == conta.NumeroAgencia && senhaLogin == conta.Titular.Senha {
+				if err == nil && contaLogin == conta.NumeroConta && agenciaLogin == conta.NumeroAgencia && senhaLogin == conta.Senha {
+					sessao := &Cliente{conta, cliente}
 					mensagemAEnviar = []byte("S")
+					servidor.iniciarSessao <- sessao
 				} else {
 					mensagemAEnviar = []byte("N")
-				}
-				cliente.Write(mensagemAEnviar)
-			//comando para criar uma conta
-			case '1':
-				dadosNovaConta := strings.Split(string(mensagem), ";")
-				nome := dadosNovaConta[1]
-				cpf := dadosNovaConta[2]
-				senha := dadosNovaConta[3]
-				numeroAgencia := "01"
-				saldo := 0.0
-				numeroConta := fmt.Sprintf("%8d", servidor.proximaConta)
-				servidor.proximaConta++
-
-				conta := &hobobank.ContaCorrente{
-					Titular: hobobank.Titular{
-						Nome:  nome,
-						CPF:   cpf,
-						Senha: senha,
-					},
-					NumeroAgencia: numeroAgencia,
-					NumeroConta:   numeroConta,
-					Saldo:         saldo,
-				}
-
-				err := salvarContaEmArquivo(conta)
-
-				if err != nil {
-					mensagemAEnviar = []byte("N")
-				} else {
-					mensagemAEnviar = []byte("S;" + numeroConta)
 				}
 				cliente.Write(mensagemAEnviar)
 			//comando para sacar dinheiro
 			case '2':
-				dadosSaque := strings.Split(string(mensagem), ";")
-				dinheiroASacar := dadosSaque[1]
+				dadosSaque := strings.Split(strMensagem, ";")
+				dinheiroASacar, err := strconv.ParseFloat(dadosSaque[1], 64)
+				if err != nil {
+					mensagemAEnviar = []byte("Erro ao converter valor a sacar")
+				} else {
+					conta, err := lerContaDoArquivo(servidor.sessoes[cliente].Conta.NumeroConta)
+
+					if err != nil {
+						mensagemAEnviar = []byte("Erro ao acessar conta de cliente")
+					} else {
+						if conta.Sacar(dinheiroASacar) {
+							mensagemAEnviar = []byte("Saque realizado com sucesso")
+						} else {
+							mensagemAEnviar = []byte("Não conseguiu realizar o saque: saldo insuficiente")
+						}
+						salvarContaEmArquivo(conta)
+					}
+				}
+				cliente.Write(mensagemAEnviar)
 			//comando para depositar dinheiro
 			case '3':
+				dadosDeposito := strings.Split(strMensagem, ";")
+				dinheiroADepositar, err := strconv.ParseFloat(dadosDeposito[1], 64)
+				if err != nil {
+					mensagemAEnviar = []byte("Erro ao converter valor a depositar")
+				} else {
+					conta, err := lerContaDoArquivo(servidor.sessoes[cliente].Conta.NumeroConta)
 
+					if err != nil {
+						mensagemAEnviar = []byte("Erro ao acessar conta de cliente")
+					} else {
+						if conta.Depositar(dinheiroADepositar) {
+							mensagemAEnviar = []byte("Depósito realizado com sucesso")
+						} else {
+							mensagemAEnviar = []byte("Não conseguiu realizar o depósito: valor a depositar deve ser positivo")
+						}
+						salvarContaEmArquivo(conta)
+					}
+				}
+				cliente.Write(mensagemAEnviar)
 			//comando para transferir dinheiro
 			case '4':
+				dadosTransferencia := strings.Split(strMensagem, ";")
+				contaATransferir := dadosTransferencia[1]
+				dinheiroATransferir, _ := strconv.ParseFloat(dadosTransferencia[2], 64)
 
+				conta, _ := lerContaDoArquivo(servidor.sessoes[cliente].Conta.NumeroConta)
+				contaTransf, _ := lerContaDoArquivo(contaATransferir)
+
+				if conta.Transferir(dinheiroATransferir, contaTransf) {
+					mensagemAEnviar = []byte("Transferência realizada com sucesso")
+				} else {
+					mensagemAEnviar = []byte("Não conseguiu realizar a transferência: saldo insuficiente ou valor negativo")
+				}
+				salvarContaEmArquivo(conta)
+				salvarContaEmArquivo(contaTransf)
+				cliente.Write(mensagemAEnviar)
 			//comando para imprimir saldo
 			case '5':
-
+				conta, _ := lerContaDoArquivo(servidor.sessoes[cliente].Conta.NumeroConta)
+				salvarContaEmArquivo(conta)
+				mensagemAEnviar = []byte("Saldo = R$" + fmt.Sprintf("%.2f", conta.Saldo))
+				cliente.Write(mensagemAEnviar)
 			//comando para encerrar a sessão com o cliente passado como parâmetro
 			case '6':
+				servidor.encerrarSessao <- servidor.sessoes[cliente]
+				mensagemAEnviar = []byte("Sessão encerrada.")
+				cliente.Write(mensagemAEnviar)
 			}
 		}
 	}
@@ -186,9 +251,9 @@ func arquivoExiste(nomeArquivo string) bool {
 }
 
 //Lê uma conta de um arquivo, de acordo como especificado, e retorna a conta
-func lerContaDoArquivo(numConta string) (*hobobank.ContaCorrente, error) {
-	nomeArquivo := "/contas/" + numConta + ".json"
-	conta := &hobobank.ContaCorrente{}
+func lerContaDoArquivo(numConta string) (*ContaCorrente, error) {
+	nomeArquivo := numConta + ".json"
+	conta := &ContaCorrente{}
 
 	if !arquivoExiste(nomeArquivo) {
 		return nil, errors.New("Arquivo não existe")
@@ -209,17 +274,77 @@ func lerContaDoArquivo(numConta string) (*hobobank.ContaCorrente, error) {
 }
 
 //Lê uma conta de um arquivo, de acordo como especificado, e retorna a conta
-func salvarContaEmArquivo(conta *hobobank.ContaCorrente) error {
-	nomeArquivo := "/contas/" + conta.NumeroConta + ".json"
+func salvarContaEmArquivo(conta *ContaCorrente) error {
+	nomeArquivo := conta.NumeroConta + ".json"
 
 	json, err := json.Marshal(conta)
 	if err != nil {
+		fmt.Println("Erro aqui cara!")
 		return errors.New("Erro ao converter a conta para json: " + err.Error())
 	}
 
-	err = ioutil.WriteFile(nomeArquivo, json, 0644)
+	arquivo, err := os.OpenFile(nomeArquivo, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0777)
 	if err != nil {
+		fmt.Println("Não, erro aqui cara!")
 		return errors.New("Erro ao salvar arquivo: " + err.Error())
 	}
+
+	n, err := arquivo.WriteString(string(json))
+	if err != nil {
+		fmt.Println("n ", n)
+		fmt.Println("erro: ", err.Error())
+	}
+
+	err = arquivo.Close()
+	if err != nil {
+		fmt.Println("ERRO: ", err.Error())
+	}
 	return nil
+}
+
+type Cliente struct {
+	Conta  *ContaCorrente
+	Socket net.Conn
+}
+
+//ContaCorrente de um banco
+type ContaCorrente struct {
+	Nome, CPF, Senha           string
+	NumeroAgencia, NumeroConta string
+	Saldo                      float64
+}
+
+//Sacar método para realizar um saque de uma conta corrente
+func (c *ContaCorrente) Sacar(valorDoSaque float64) bool {
+	podeSacar := valorDoSaque > 0 && valorDoSaque <= c.Saldo
+	if podeSacar {
+		c.Saldo -= valorDoSaque
+		return true
+	}
+	return false
+}
+
+//Depositar método para realizar o depósito de uma conta corrente
+func (c *ContaCorrente) Depositar(valorDoDeposito float64) bool {
+	if valorDoDeposito > 0 {
+		c.Saldo += valorDoDeposito
+		return true
+	}
+	return false
+}
+
+//Transferir método para realizar uma transferência
+//entre esta conta corrente e a passada como parâmetro
+func (c *ContaCorrente) Transferir(valorTransferencia float64, contaDestino *ContaCorrente) bool {
+	if valorTransferencia > 0 && valorTransferencia <= c.Saldo {
+		c.Saldo -= valorTransferencia
+		contaDestino.Depositar(valorTransferencia)
+		return true
+	}
+	return false
+}
+
+//ObterSaldo funçao para retornar o valor do Saldo
+func (c *ContaCorrente) ObterSaldo() float64 {
+	return c.Saldo
 }

@@ -38,6 +38,7 @@ func main() {
 		if err == io.EOF {
 			return //se deu EOF na leitura padrão, é porque o programa cliente foi fechado
 		}
+		mensagem = strings.Trim(mensagem, "\r\n")
 		opcao := strings.ToUpper(strings.Trim(mensagem, " \r\n"))
 		switch opcao {
 		case "1":
@@ -76,49 +77,56 @@ func (cliente *Cliente) receber() {
 	}
 }
 
-//Função para logar o cliente na conta
-func (cliente *Cliente) logar() bool {
-	logado := false
-	fmt.Print("\n------ LOGIN ------\n",
-		"Número da conta: ")
-	conta, _ := johnLennon.ReadString('\n')
-	fmt.Print("\nAgência: ")
-	agencia, _ := johnLennon.ReadString('\n')
-	fmt.Print("\nSenha: ")
-	senha, _ := johnLennon.ReadString('\n')
-	mensagemAEnviar := make([]byte, tamanhoMaxMensagem)
-	mensagemAEnviar = []byte("0;" + conta + ";" + agencia + ";" + senha)
-	cliente.socket.Write(mensagemAEnviar)
-	mensagemAReceber := make([]byte, tamanhoMaxMensagem)
-	tamMensagemAReceber, err := cliente.socket.Read(mensagemAReceber)
-
-	//Se tiver algum erro, fecha a conexão
-	if err != nil {
-		fmt.Println("Ocorreu um erro de comunicação com o servidor:", err)
-		cliente.socket.Close()
-	}
-	if tamMensagemAReceber > 0 {
-		if string(mensagemAReceber) == "S" {
-			logado = true
-			fmt.Print("Logado com sucesso!\n\n")
-			cliente.numeroConta = conta
-		}
-	}
-	return logado
-}
-
 //Função que lê os dados do cliente e cria uma conta para ele
 func (cliente *Cliente) criarConta() {
 	fmt.Print("\n------ CRIAR CONTA ------\n",
 		"Seus dados:\n",
 		"Nome: ")
 	nome, _ := johnLennon.ReadString('\n')
+	nome = strings.Trim(nome, "\r\n")
 	fmt.Print("\nCPF: ")
 	cpf, _ := johnLennon.ReadString('\n')
+	cpf = strings.Trim(cpf, "\r\n")
 	fmt.Print("\nSenha: ")
 	senha, _ := johnLennon.ReadString('\n')
+	senha = strings.Trim(senha, "\r\n")
 	mensagemAEnviar := make([]byte, tamanhoMaxMensagem)
-	mensagemAEnviar = []byte("1;" + nome + ";" + cpf + ";" + senha)
+	mensagemAEnviar = []byte("0;" + nome + ";" + cpf + ";" + senha)
+	cliente.socket.Write(mensagemAEnviar)
+	mensagemAReceber := make([]byte, tamanhoMaxMensagem)
+	tamMensagemAReceber, err := cliente.socket.Read(mensagemAReceber)
+
+	//Se tiver algum erro, fecha a conexão
+	if err != nil {
+		fmt.Println("Ocorreu um erro de comunicação com o servidor:", err, tamMensagemAReceber)
+		cliente.socket.Close()
+	}
+	if tamMensagemAReceber > 0 {
+		if strings.Compare(strings.Trim(string(mensagemAReceber), "\r\n"), "N") != 0 {
+			fmt.Println(string(mensagemAReceber))
+			cliente.numeroConta = strings.Split(string(mensagemAReceber), ";")[1]
+			fmt.Print("Conta criada com sucesso! Seu número de conta é " + cliente.numeroConta + " e o de agência é 01.\n\n")
+		} else {
+			fmt.Println("Não conseguiu criar a conta")
+		}
+	}
+}
+
+//Função para logar o cliente na conta
+func (cliente *Cliente) logar() bool {
+	logado := false
+	fmt.Print("\n------ LOGIN ------\n",
+		"Número da conta: ")
+	conta, _ := johnLennon.ReadString('\n')
+	conta = strings.Trim(conta, "\r\n")
+	fmt.Print("\nAgência: ")
+	agencia, _ := johnLennon.ReadString('\n')
+	agencia = strings.Trim(agencia, "\r\n")
+	fmt.Print("\nSenha: ")
+	senha, _ := johnLennon.ReadString('\n')
+	senha = strings.Trim(senha, "\r\n")
+	mensagemAEnviar := make([]byte, tamanhoMaxMensagem)
+	mensagemAEnviar = []byte("1;" + conta + ";" + agencia + ";" + senha)
 	cliente.socket.Write(mensagemAEnviar)
 	mensagemAReceber := make([]byte, tamanhoMaxMensagem)
 	tamMensagemAReceber, err := cliente.socket.Read(mensagemAReceber)
@@ -129,11 +137,13 @@ func (cliente *Cliente) criarConta() {
 		cliente.socket.Close()
 	}
 	if tamMensagemAReceber > 0 {
-		if string(mensagemAReceber) != "N" {
-			cliente.numeroConta = strings.Split(string(mensagemAReceber), ";")[1]
-			fmt.Print("Conta criada com sucesso! Seu número de conta é " + cliente.numeroConta + " e o de agência é 01.\n\n")
+		if string(mensagemAReceber[:tamMensagemAReceber]) == "S" {
+			logado = true
+			fmt.Print("Logado com sucesso!\n\n")
+			cliente.numeroConta = conta
 		}
 	}
+	return logado
 }
 
 //Função que vai lidar com a sessão
@@ -149,30 +159,31 @@ func (cliente *Cliente) gerenciarSessao() {
 		case "1":
 			fmt.Print("\nDigite a quantidade a sacar: ")
 			dinheiroASacar, _ := johnLennon.ReadString('\n')
-			mensagemAEnviar = []byte("2;" + dinheiroASacar + ";" + cliente.numeroConta)
+			dinheiroASacar = strings.Trim(strings.ToUpper(dinheiroASacar), " \r\n")
+			mensagemAEnviar = []byte("2;" + dinheiroASacar)
 			cliente.socket.Write(mensagemAEnviar)
 			cliente.receber()
 		case "2":
 			fmt.Print("\nDigite a quantidade a depositar: ")
 			dinheiroADepositar, _ := johnLennon.ReadString('\n')
-			mensagemAEnviar = []byte("3;" + dinheiroADepositar + ";" + cliente.numeroConta)
+			dinheiroADepositar = strings.Trim(strings.ToUpper(dinheiroADepositar), " \r\n")
+			mensagemAEnviar = []byte("3;" + dinheiroADepositar)
 			cliente.socket.Write(mensagemAEnviar)
 			cliente.receber()
 		case "3":
 			fmt.Print("\nDigite o número da conta a transferir: ")
 			contaATransferir, _ := johnLennon.ReadString('\n')
-			fmt.Print("\nDigite o número da agência a transferir: ")
-			agenciaATransferir, _ := johnLennon.ReadString('\n')
-			fmt.Print("\nDigite a quantidade a tranferir: ")
+			contaATransferir = strings.Trim(strings.ToUpper(contaATransferir), " \r\n")
+			fmt.Print("\nDigite a quantidade a transferir: ")
 			dinheiroATransferir, _ := johnLennon.ReadString('\n')
-			mensagemAEnviar = []byte("4;" + cliente.numeroConta + ";" + contaATransferir + ";" + agenciaATransferir + ";" + dinheiroATransferir)
+			dinheiroATransferir = strings.Trim(strings.ToUpper(dinheiroATransferir), " \r\n")
+			mensagemAEnviar = []byte("4;" + contaATransferir + ";" + dinheiroATransferir)
 			cliente.socket.Write(mensagemAEnviar)
 			cliente.receber()
 		case "4":
-			mensagemAEnviar = []byte("5;" + cliente.numeroConta)
+			mensagemAEnviar = []byte("5")
 			cliente.socket.Write(mensagemAEnviar)
 			cliente.receber()
-			return
 		case "5":
 			fmt.Print("\nSaindo do HoboBank...\n\n")
 			mensagemAEnviar = []byte("6")
@@ -197,7 +208,6 @@ func exibirMenuPrincipal() {
 
 //Exibe o menu de um usuário logado
 func exibirMenuBanco() {
-	fmt.Println("Paulin é bom")
 	fmt.Print("\n------ MENU HOBOBANK ------\n",
 		"Digite sua opção:\n",
 		"1 - Sacar dinheiro\n",
