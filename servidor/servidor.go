@@ -130,18 +130,13 @@ func (servidor *Servidor) receber(cliente net.Conn) {
 					Saldo:         saldo,
 				}
 
-				fmt.Println("Antes de salvar")
 				err := salvarContaEmArquivo(conta)
-				fmt.Println("Depois de salvar")
 				if err != nil {
 					mensagemAEnviar = []byte("N")
 				} else {
-					fmt.Println("SEM ERRO CARA")
 					mensagemAEnviar = []byte("S;" + numeroConta)
 				}
-				fmt.Println("Antes de mandar para o cliente")
 				_, err = cliente.Write(mensagemAEnviar)
-				fmt.Println("Depois de mandar para o cliente")
 			//comando para logar no banco
 			case '1':
 				dadosLogin := strings.Split(strMensagem, ";")
@@ -279,13 +274,11 @@ func salvarContaEmArquivo(conta *ContaCorrente) error {
 
 	json, err := json.Marshal(conta)
 	if err != nil {
-		fmt.Println("Erro aqui cara!")
 		return errors.New("Erro ao converter a conta para json: " + err.Error())
 	}
 
 	arquivo, err := os.OpenFile(nomeArquivo, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0777)
 	if err != nil {
-		fmt.Println("Não, erro aqui cara!")
 		return errors.New("Erro ao salvar arquivo: " + err.Error())
 	}
 
